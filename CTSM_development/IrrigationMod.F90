@@ -1,3 +1,5 @@
+! Yi Yao's irrigation mod
+! Updating to ctsm5.2 by Aman Shrestha
 module IrrigationMod
 
   !-----------------------------------------------------------------------
@@ -73,12 +75,13 @@ module IrrigationMod
 #include "shr_assert.h"
   use shr_kind_mod     , only : r8 => shr_kind_r8
   use decompMod        , only : bounds_type, get_proc_global
+  use decompMod        , only : subgrid_level_gridcell, subgrid_level_column, subgrid_level_patch
   use shr_log_mod      , only : errMsg => shr_log_errMsg
   use abortutils       , only : endrun
   use clm_instur       , only : irrig_method
   use pftconMod        , only : pftcon
   use clm_varctl       , only : iulog
-  use clm_varcon       , only : isecspday, denh2o, spval, ispval, namep, namec, nameg
+  use clm_varcon       , only : isecspday, denh2o, spval, ispval
   use clm_varpar       , only : nlevsoi, nlevgrnd
   use clm_time_manager , only : get_step_size
   use SoilHydrologyMod , only : CalcIrrigWithdrawals
@@ -765,7 +768,7 @@ contains
              this%irrig_method_patch(p) = this%params%irrig_method_default
           else if (irrig_method(g,m) /= irrig_method_drip .and. irrig_method(g,m) /= irrig_method_sprinkler .and. irrig_method(g,m) /= irrig_method_flood) then
              write(iulog,*) subname //' invalid irrigation method specified'
-             call endrun(decomp_index=g, clmlevel=nameg, msg='bad irrig_method '// &
+             call endrun(subgrid_index=g, subgrid_level=subgrid_level_gridcell, msg='bad irrig_method '// &
                   errMsg(sourcefile, __LINE__))
           end if
        else
@@ -1124,6 +1127,7 @@ contains
     if (this%params%use_groundwater_irrigation) then
 
        call CalcTracerFromBulk( &
+            subgrid_level = subgrid_level_column, &
             lb            = begc, &
             num_pts       = num_soilc, &
             filter_pts    = filter_soilc, &
@@ -1133,6 +1137,7 @@ contains
             tracer_val    = waterflux_tracer_inst%qflx_gw_con_irrig_col(begc:endc))
        do j = 1, nlevsoi
           call CalcTracerFromBulk( &
+               subgrid_level = subgrid_level_column, &
                lb            = begc, &
                num_pts       = num_soilc, &
                filter_pts    = filter_soilc, &
@@ -1266,7 +1271,7 @@ contains
                 write(iulog,*) 'qflx_sfc_irrig_bulk_patch = ', qflx_sfc_irrig_bulk_patch(p)
                 write(iulog,*) 'waterflux_inst%qflx_sfc_irrig_col = ', &
                      waterflux_inst%qflx_sfc_irrig_col(c)
-                call endrun(decomp_index=p, clmlevel=namep, &
+                call endrun(subgrid_index=p, subgrid_level=subgrid_level_patch, &
                      msg = 'If qflx_sfc_irrig_bulk_col <= 0, ' // &
                      'expect qflx_sfc_irrig_bulk_patch = waterflux_inst%qflx_sfc_irrig_col = 0', &
                      additional_msg = errMsg(sourcefile, __LINE__))
@@ -1299,7 +1304,7 @@ contains
              write(iulog,*) 'qflx_gw_demand_bulk_col = ', qflx_gw_demand_bulk_col(c)
              write(iulog,*) 'qflx_gw_demand_bulk_patch = ', qflx_gw_demand_bulk_patch(p)
              write(iulog,*) 'qflx_gw_irrig_withdrawn_col = ', qflx_gw_irrig_withdrawn_col(c)
-             call endrun(decomp_index=p, clmlevel=namep, &
+             call endrun(subgrid_index=p, subgrid_level=subgrid_level_patch, &
                   msg = 'If qflx_gw_demand_bulk_col <= 0, expect qflx_gw_demand_bulk_patch = qflx_gw_irrig_withdrawn_col = 0', &
                   additional_msg = errMsg(sourcefile, __LINE__))
           end if
@@ -1311,7 +1316,7 @@ contains
 
        ! Set drip/sprinkler irrigation based on irrigation method from input data
        waterflux_inst%qflx_irrig_drip_patch(p)      = 0._r8
-       waterflux_inst%qflx_irrig_sprinkler_patch(p) = 0._r8   
+       waterflux_inst%qflx_irrig_sprinkler_patch(p) = 0._r8
 
        if(this%irrig_method_patch(p) == irrig_method_drip) then
           waterflux_inst%qflx_irrig_drip_patch(p)      = qflx_irrig_tot
@@ -1401,6 +1406,7 @@ contains
 
     ! column liquid water (kg/m2) [col, nlevgrnd] (note that this does NOT contain the snow levels)
     real(r8), intent(in) :: h2osoi_liq( bounds%begc: , 1: )
+
     ! river water volume (m3) (ignored if rof_prognostic is .false.)
     real(r8), intent(in) :: volr( bounds%begg: )
 
@@ -1529,7 +1535,7 @@ contains
                      eff_porosity = eff_porosity(c,j), &
                      dz = col%dz(c,j))
                 h2osoi_liq_target_tot(c) = h2osoi_liq_target_tot(c) + &
-                     h2osoi_liq_target 
+                     h2osoi_liq_target
                 h2osoi_liq_target_satu = this%RelsatToH2osoi( &
                      relsat = 1._r8, &
                      eff_porosity = eff_porosity(c,j), &
@@ -1556,6 +1562,7 @@ contains
 
     do fc = 1, check_for_irrig_col_filter%num
        c = check_for_irrig_col_filter%indices(fc)
+
        h2osoi_liq_at_threshold = h2osoi_liq_wilting_point_tot(c) + &
             this%params%irrig_threshold_fraction * &
             (h2osoi_liq_target_tot(c) - h2osoi_liq_wilting_point_tot(c))
@@ -1567,7 +1574,7 @@ contains
              write(iulog,*) subname//' ERROR: deficit < 0'
              write(iulog,*) 'This implies that irrigation target is less than irrigatio&
                   &n threshold, which should never happen'
-             call endrun(decomp_index=c, clmlevel=namec, msg='deficit < 0 '// &
+             call endrun(subgrid_index=c, subgrid_level=subgrid_level_column, msg='deficit < 0 '// &
                   errMsg(sourcefile, __LINE__))
          end if
       else if (h2osoi_liq_tot(c) < h2osoi_liq_target_satu_tot(c)) then 
